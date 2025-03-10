@@ -1,15 +1,5 @@
 // SPDX-License-Identifier: MIT
-//                                                   
-//                                                   
-//  /$$$$$$  /$$    /$$ /$$$$$$   /$$$$$$  /$$   /$$
-// |____  $$|  $$  /$$/|____  $$ /$$__  $$| $$  | $$
-//  /$$$$$$$ \  $$/$$/  /$$$$$$$| $$  \__/| $$  | $$
-// /$$__  $$  \  $$$/  /$$__  $$| $$      | $$  | $$
-//|  $$$$$$$   \  $/  |  $$$$$$$| $$      |  $$$$$$$
-// \_______/    \_/    \_______/|__/       \____  $$
-//                                         /$$  | $$
-//                                        |  $$$$$$/
-//                                         \______/
+
 pragma solidity ^0.8.25;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -19,30 +9,36 @@ import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC2
 import {Nonces} from "@openzeppelin/contracts/utils/Nonces.sol";
 
 contract AvaryToken is ERC20, ERC20Permit, ERC20Votes, ERC20Burnable {
-    error NotDeployer();
+    error NotCreator();
 
     string private _name;
     string private _symbol;
     uint8 private immutable _decimals;
 
-    address private _deployer;
+    address private immutable _creator;
+    address private immutable _payout;
     string private _image;
+    bytes32 private immutable _houseFactoryId;
 
     constructor(
         string memory name_,
         string memory symbol_,
         uint256 maxSupply_,
-        address deployer_,
-        string memory image_
+        address creator_,
+        address payout_,
+        string memory image_,
+        bytes32 houseFactoryId_
     ) ERC20(name_, symbol_) ERC20Permit(name_) {
-        _deployer = deployer_;
+        _creator = creator_;
+        _payout = payout_;
         _image = image_;
+        _houseFactoryId = houseFactoryId_;
         _mint(msg.sender, maxSupply_);
     }
 
     function updateImage(string memory image_) public {
-        if (msg.sender != _deployer) {
-            revert NotDeployer();
+        if (msg.sender != _creator) {
+            revert NotCreator();
         }
         _image = image_;
     }
@@ -61,11 +57,19 @@ contract AvaryToken is ERC20, ERC20Permit, ERC20Votes, ERC20Burnable {
         return super.nonces(owner);
     }
 
-    function deployer() public view returns (address) {
-        return _deployer;
+    function creator() public view returns (address) {
+        return _creator;
+    }
+
+    function payout() public view returns (address) {
+        return _payout;
     }
 
     function image() public view returns (string memory) {
         return _image;
+    }
+
+    function houseFactoryId() public view returns (bytes32) {
+        return _houseFactoryId;
     }
 }

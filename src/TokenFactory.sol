@@ -1,37 +1,29 @@
 // SPDX-License-Identifier: MIT
-//                                                   
-//                                                   
-//  /$$$$$$  /$$    /$$ /$$$$$$   /$$$$$$  /$$   /$$
-// |____  $$|  $$  /$$/|____  $$ /$$__  $$| $$  | $$
-//  /$$$$$$$ \  $$/$$/  /$$$$$$$| $$  \__/| $$  | $$
-// /$$__  $$  \  $$$/  /$$__  $$| $$      | $$  | $$
-//|  $$$$$$$   \  $/  |  $$$$$$$| $$      |  $$$$$$$
-// \_______/    \_/    \_______/|__/       \____  $$
-//                                         /$$  | $$
-//                                        |  $$$$$$/
-//                                         \______/
+
 pragma solidity ^0.8.25;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {TickMath} from "@uniswap/v3-core/contracts/libraries/TickMath.sol";
+import {TickMath} from "./TickMath.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {INonfungiblePositionManager, IUniswapV3Factory, ILocker, ISwapRouter, ExactInputSingleParams} from "./interface.sol";
 import {AvaryToken} from "./AvaryToken.sol";
-import {LpLockerv2} from "./LpLockerv2.sol";
+import {AvaryHouse} from "./AvaryHouse.sol";
 
-contract Avary is Ownable {
+contract TokenFactory is Ownable {
     using TickMath for int24;
 
     error Deprecated();
     error InvalidConfig();
-    error NotAdmin(address user);
     error NotAllowedPairedToken(address token);
     error TokenNotFound(address token);
+    error InvalidAddress();
+    error InvalidTickSpacing();
+    error HouseFactoryNotFound(bytes32 houseFactoryId);
 
-    LpLockerv2 public liquidityLocker;
+    AvaryHouse public liquidityLocker;
     string public constant version = "0.0.2";
 
-    address public wavax = 0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7;
+    address public immutable wrappedNative;
 
     IUniswapV3Factory public uniswapV3Factory;
     INonfungiblePositionManager public positionManager;
@@ -39,7 +31,6 @@ contract Avary is Ownable {
 
     bool public deprecated;
 
-    mapping(address => bool) public admins;
     mapping(address => bool) public allowedPairedTokens;
 
     struct PoolConfig {
@@ -52,6 +43,9 @@ contract Avary is Ownable {
         address token;
         uint256 positionId;
         address locker;
+        address creator;
+        address payout;
+        bytes32 houseFactoryId;
     }
 
     mapping(address => DeploymentInfo[]) public tokensDeployedByUsers;
@@ -60,30 +54,28 @@ contract Avary is Ownable {
     event TokenCreated(
         address tokenAddress,
         uint256 positionId,
-        address deployer,
+        address creator,
+        address payout,
         string name,
         string symbol,
         uint256 supply,
-        address lockerAddress
+        address lockerAddress,
+        bytes32 houseFactoryId
     );
-
-    modifier onlyOwnerOrAdmin() {
-        if (msg.sender != owner() && !admins[msg.sender])
-            revert NotAdmin(msg.sender);
-        _;
-    }
 
     constructor(
         address locker_,
         address uniswapV3Factory_,
         address positionManager_,
         address swapRouter_,
-        address owner_
+        address owner_,
+        address wrappedNative_
     ) Ownable(owner_) {
-        liquidityLocker = LpLockerv2(locker_);
+        liquidityLocker = AvaryHouse(locker_);
         uniswapV3Factory = IUniswapV3Factory(uniswapV3Factory_);
         positionManager = INonfungiblePositionManager(positionManager_);
         swapRouter = swapRouter_;
+        wrappedNative = wrappedNative_;
     }
 
     function getTokensDeployedByUser(
@@ -99,9 +91,10 @@ contract Avary is Ownable {
         int24 tickSpacing,
         uint24 fee,
         uint256 supplyPerPool,
-        address deployer
+        address deployer,
+        bytes32 houseFactoryId
     ) internal returns (uint256 positionId) {
-        require(newToken < pairedToken, "Invalid salt");
+        require(newToken < pairedToken, "Invalid token order");
 
         uint160 sqrtPriceX96 = tick.getSqrtRatioAtTick();
 
@@ -134,9 +127,10 @@ contract Avary is Ownable {
         );
 
         liquidityLocker.addUserRewardRecipient(
-            LpLockerv2.UserRewardRecipient({
+            AvaryHouse.UserRewardRecipient({
                 recipient: deployer,
-                lpTokenId: positionId
+                lpTokenId: positionId,
+                houseFactoryId: houseFactoryId
             })
         );
     }
@@ -146,32 +140,36 @@ contract Avary is Ownable {
         string calldata _symbol,
         uint256 _supply,
         uint24 _fee,
-        bytes32 _salt,
-        address _deployer,
+        address _creator,
+        address _payout,
         string memory _image,
-        PoolConfig memory _poolConfig
+        PoolConfig memory _poolConfig,
+        bytes32 _houseFactoryId
     )
         external
         payable
-        onlyOwnerOrAdmin
         returns (AvaryToken token, uint256 positionId)
     {
         if (deprecated) revert Deprecated();
         if (!allowedPairedTokens[_poolConfig.pairedToken])
             revert NotAllowedPairedToken(_poolConfig.pairedToken);
 
+        // Validate addresses
+        if (_creator == address(0) || _payout == address(0)) revert InvalidAddress();
+        
+        // Validate tick spacing
         int24 tickSpacing = uniswapV3Factory.feeAmountTickSpacing(_fee);
-        require(
-            tickSpacing != 0 && _poolConfig.tick % tickSpacing == 0,
-            "Invalid tick"
-        );
+        if (tickSpacing == 0 || _poolConfig.tick % tickSpacing != 0) 
+            revert InvalidTickSpacing();
 
-        token = new AvaryToken{salt: keccak256(abi.encode(_deployer, _salt))}(
+        token = new AvaryToken(
             _name,
             _symbol,
             _supply,
-            _deployer,
-            _image
+            _creator,
+            _payout,
+            _image,
+            _houseFactoryId
         );
 
         token.approve(address(positionManager), _supply);
@@ -183,24 +181,24 @@ contract Avary is Ownable {
             tickSpacing,
             _fee,
             _supply,
-            _deployer
+            _payout,
+            _houseFactoryId
         );
 
         if (msg.value > 0) {
             uint256 amountOut = msg.value;
-            // If it's not WAVAX, we must buy the token first...
-            if (_poolConfig.pairedToken != wavax) {
+            if (_poolConfig.pairedToken != wrappedNative) {
                 ExactInputSingleParams memory swapParams = ExactInputSingleParams({
-                    tokenIn: wavax, // The token we are exchanging from (AVAX wrapped as WAVAX)
-                    tokenOut: _poolConfig.pairedToken, // The token we are exchanging to
-                    fee: _poolConfig.devBuyFee, // The pool fee
-                    recipient: address(this), // The recipient address
-                    amountIn: msg.value, // The amount of AVAX (WAVAX) to be swapped
-                    amountOutMinimum: 0, // Minimum amount to receive
-                    sqrtPriceLimitX96: 0 // No price limit
+                    tokenIn: wrappedNative,
+                    tokenOut: _poolConfig.pairedToken,
+                    fee: _poolConfig.devBuyFee,
+                    recipient: address(this),
+                    amountIn: msg.value,
+                    amountOutMinimum: 0,
+                    sqrtPriceLimitX96: 0
                 });
 
-                amountOut = ISwapRouter(swapRouter).exactInputSingle{ // The call to `exactInputSingle` executes the swap.
+                amountOut = ISwapRouter(swapRouter).exactInputSingle{
                     value: msg.value
                 }(swapParams);
 
@@ -211,43 +209,43 @@ contract Avary is Ownable {
             }
 
             ExactInputSingleParams memory swapParamsToken = ExactInputSingleParams({
-                tokenIn: _poolConfig.pairedToken, // The token we are exchanging from (AVAX wrapped as WAVAX)
-                tokenOut: address(token), // The token we are exchanging to
-                fee: _fee, // The pool fee
-                recipient: _deployer, // The recipient address
-                amountIn: amountOut, // The amount of AVAX (WAVAX) to be swapped
-                amountOutMinimum: 0, // Minimum amount to receive
-                sqrtPriceLimitX96: 0 // No price limit
+                tokenIn: _poolConfig.pairedToken,
+                tokenOut: address(token),
+                fee: _fee,
+                recipient: _payout,
+                amountIn: amountOut,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
             });
 
-            // The call to `exactInputSingle` executes the swap.
             ISwapRouter(swapRouter).exactInputSingle{
-                value: _poolConfig.pairedToken == wavax ? msg.value : 0
+                value: _poolConfig.pairedToken == wrappedNative ? msg.value : 0
             }(swapParamsToken);
         }
 
         DeploymentInfo memory deploymentInfo = DeploymentInfo({
             token: address(token),
             positionId: positionId,
-            locker: address(liquidityLocker)
+            locker: address(liquidityLocker),
+            creator: _creator,
+            payout: _payout,
+            houseFactoryId: _houseFactoryId
         });
 
         deploymentInfoForToken[address(token)] = deploymentInfo;
-        tokensDeployedByUsers[_deployer].push(deploymentInfo);
+        tokensDeployedByUsers[_payout].push(deploymentInfo);
 
         emit TokenCreated(
             address(token),
             positionId,
-            _deployer,
+            _creator,
+            _payout,
             _name,
             _symbol,
             _supply,
-            address(liquidityLocker)
+            address(liquidityLocker),
+            _houseFactoryId
         );
-    }
-
-    function setAdmin(address admin, bool isAdmin) external onlyOwner {
-        admins[admin] = isAdmin;
     }
 
     function toggleAllowedPairedToken(
@@ -272,7 +270,7 @@ contract Avary is Ownable {
     }
 
     function updateLiquidityLocker(address newLocker) external onlyOwner {
-        liquidityLocker = LpLockerv2(newLocker);
+        liquidityLocker = AvaryHouse(newLocker);
     }
 }
 

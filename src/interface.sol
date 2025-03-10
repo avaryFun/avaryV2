@@ -1,15 +1,5 @@
 // SPDX-License-Identifier: MIT
-//                                                   
-//                                                   
-//  /$$$$$$  /$$    /$$ /$$$$$$   /$$$$$$  /$$   /$$
-// |____  $$|  $$  /$$/|____  $$ /$$__  $$| $$  | $$
-//  /$$$$$$$ \  $$/$$/  /$$$$$$$| $$  \__/| $$  | $$
-// /$$__  $$  \  $$$/  /$$__  $$| $$      | $$  | $$
-//|  $$$$$$$   \  $/  |  $$$$$$$| $$      |  $$$$$$$
-// \_______/    \_/    \_______/|__/       \____  $$
-//                                         /$$  | $$
-//                                        |  $$$$$$/
-//                                         \______/
+
 pragma solidity ^0.8.25;
 
 /// @title Uniswap V3 Interfaces for Avalanche
@@ -121,7 +111,7 @@ interface ILockerFactory {
 interface ILocker {
     /// @notice Initializes the locker with position IDs
     function initializer(
-        uint256 wavaxPositionId,
+        uint256 wrappedPositionId,
         uint256 avaryPositionId
     ) external;
 
